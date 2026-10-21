@@ -3,24 +3,31 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import * as duplicate from './duplicate-check.mjs';
+import * as merging from './duplicate-merge.mjs';
 
 function harness(){
   const elements = new Map();
   function element(id){
-    if(!elements.has(id)) elements.set(id, {value:'',innerHTML:'',textContent:'',style:{},disabled:false,
+    if(!elements.has(id)) elements.set(id, {value:'',innerHTML:'',textContent:'',style:{},disabled:false,children:[],
       classList:{add(){},remove(){},toggle(){}}, addEventListener(type, fn){this[type]=fn;},
-      querySelectorAll(){return [];},setAttribute(){},append(){},replaceChildren(){}});
+      querySelectorAll(){return this.children.filter(c=>c.onclick);},setAttribute(){},append(...nodes){this.children.push(...nodes);},replaceChildren(){this.children=[];}});
     return elements.get(id);
   }
   const state={rows:[],writes:[],failRead:false,failWriteAt:0};
-  const context=vm.createContext({...duplicate, console, window:{}, setTimeout(){}, alert(){},
+  const context=vm.createContext({...duplicate, ...merging, console, window:{}, setTimeout(fn){fn();}, alert(){},confirm:()=>true,crypto:{randomUUID:()=> 'test-token'},
     firebaseConfig:{},initializeApp:()=>({}),getAuth:()=>({}),getFirestore:()=>({}),onAuthStateChanged(){},
     collection:()=>({}),doc:(_db,_col,id)=>id,
     getDocsFromServer:async()=>{if(state.failRead) throw Error('offline'); return {docs:state.rows.map(q=>({id:q.id,data:()=>{const {id,...data}=q; return data;}}))};},
     setDoc:async(id,data)=>{if(state.failWriteAt && state.writes.length+1===state.failWriteAt) throw Error('write failed'); state.writes.push(data);state.rows.push(data);},
+    runTransaction:async(_db,fn)=>{
+      const writes=[];
+      await fn({get:async id=>{const q=state.rows.find(x=>x.id===id);return {exists:()=>!!q,data:()=>q};},update:(id,patch)=>writes.push({id,patch})});
+      if(state.failTransaction) throw Error('transaction failed');
+      for(const {id,patch} of writes) Object.assign(state.rows.find(q=>q.id===id),patch);
+    },
     document:{getElementById:element,querySelectorAll:()=>[],querySelector:()=>null,addEventListener(){},createElement:()=>element(Symbol())}
   });
-  const source=fs.readFileSync(new URL('./app.js',import.meta.url),'utf8').replace(/^import[\s\S]*?from\s+"[^"]+";\n/gm,'');
+  const source=fs.readFileSync(new URL('./app.js',import.meta.url),'utf8').replace(/\r\n/g,'\n').replace(/^import[\s\S]*?from\s+"[^"]+";\n/gm,'');
   vm.runInContext(source,context);
   vm.runInContext('renderTable = ()=>{};',context);
   return {state,element,run:code=>vm.runInContext(code,context)};
@@ -32,6 +39,43 @@ test('single upload refuses to write when the existing collection cannot load',a
   assert.equal(h.state.writes.length,0);
   assert.match(h.element('checkResult').textContent,/중단/);
   assert.equal(h.element('checkAndUpload').disabled,false);
+});
+test('audit merge and persistent recovery preserve original content and usage',async()=>{
+  const h=harness();
+  h.state.rows=[{...item,id:'COM-0001',usageLog:[{institution:'학교A'}]},{...item,id:'COM-0002',usageLog:[{institution:'학교B'}]}];
+  await h.element('scanDuplicates').click();
+  const row=h.element('duplicateAudit').children[1];
+  const actions=row.children.at(-2);
+  await actions.children[0].onclick();
+  assert.equal(h.state.rows[1].deleted,true);
+  assert.equal(h.state.rows[0].usageLog.length,2);
+  assert.equal(h.state.rows[1].stem,item.stem);
+  await h.element('restoreDuplicates').click();
+  const archive=h.element('duplicateAudit').children[1];
+  await archive.children[1].onclick();
+  assert.equal(h.state.rows[1].deleted,false);
+  assert.equal(h.state.rows[0].usageLog.length,2);
+});
+test('failed transaction changes neither question',async()=>{
+  const h=harness();
+  h.state.rows=[{...item,id:'COM-0001',usageLog:[]},{...item,id:'COM-0002',usageLog:[{institution:'학교B'}]}];
+  h.state.failTransaction=true;
+  await h.element('scanDuplicates').click();
+  await h.element('duplicateAudit').children[1].children.at(-2).children[0].onclick();
+  assert.equal(h.state.rows[0].usageLog.length,0);
+  assert.equal(h.state.rows[1].deleted,undefined);
+});
+test('content changed after audit is not merged using a stale comparison',async()=>{
+  const h=harness();h.state.rows=[{...item,id:'COM-0001'},{...item,id:'COM-0002'}];
+  await h.element('scanDuplicates').click();
+  h.state.rows[1].stem='변경된 문제';
+  await h.element('duplicateAudit').children[1].children.at(-2).children[0].onclick();
+  assert.equal(h.state.rows[1].deleted,undefined);
+});
+test('archived question IDs are not reused by new uploads',async()=>{
+  const h=harness();h.state.rows=[{...item,id:'COM-0010',deleted:true}];
+  await h.run('refreshQuestions()');
+  assert.equal(h.run('nextIdFor("의사소통능력")'),'COM-0011');
 });
 test('batch rechecks server data added after preview, including documents without an id field',async()=>{
   const h=harness();h.state.rows=[{...item,id:'COM-0088'}];

@@ -1,4 +1,5 @@
 import { SIM_THRESHOLD, questionSimilarity, bestDuplicate } from "./duplicate-check.mjs";
+import { mergePatches, contentDifferences } from "./duplicate-merge.mjs";
 import { firebaseConfig } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
@@ -6,7 +7,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc,
-  onSnapshot, getDocsFromServer
+  onSnapshot, getDocsFromServer, runTransaction
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
@@ -29,6 +30,7 @@ const DOMAIN_COLORS = {
 };
 
 let allQuestions = [];      // live cache from Firestore onSnapshot
+let reservedQuestionIds = new Set();
 let currentList = [];
 let detailIdx = 0;
 let selectedIds = new Set();
@@ -70,6 +72,7 @@ function startListening(){
   if(unsub) return;
   const q = collection(db, QUESTIONS_COL);
   unsub = onSnapshot(q, (snap)=>{
+    reservedQuestionIds = new Set(snap.docs.map(d=>d.id));
     allQuestions = snap.docs.map(d=>({...d.data(), id:d.id})).filter(x=>!x.deleted).sort((a,b)=>a.id.localeCompare(b.id));
     renderTable();
   });
@@ -78,6 +81,7 @@ function startListening(){
 async function refreshQuestions(){
   // Fail closed: an unavailable server must never mean "no duplicates".
   const snap = await getDocsFromServer(collection(db, QUESTIONS_COL));
+  reservedQuestionIds = new Set(snap.docs.map(d=>d.id));
   allQuestions = snap.docs.map(d=>({...d.data(), id:d.id})).filter(q=>!q.deleted);
   renderTable();
 }
@@ -88,11 +92,41 @@ async function ensureDuplicateData(box){
 
 function nextIdFor(domain){
   const code = DOMAIN_CODE[domain] || "ETC";
-  const nums = allQuestions.filter(q=>q.id.startsWith(code+"-"))
-    .map(q=>parseInt(q.id.split("-")[1],10)).filter(n=>!isNaN(n));
+  const nums = [...new Set([...reservedQuestionIds, ...allQuestions.map(q=>q.id)])].filter(id=>id.startsWith(code+"-"))
+    .map(id=>parseInt(id.split("-")[1],10)).filter(n=>!isNaN(n));
   const maxN = nums.length ? Math.max(...nums) : 0;
   return code+"-"+String(maxN+1).padStart(4,"0");
 }
+
+document.getElementById("restoreDuplicates").addEventListener("click", async ()=>{
+  const box=document.getElementById("duplicateAudit");
+  box.textContent="정리한 문항을 불러오는 중...";
+  try {
+    const snap=await getDocsFromServer(collection(db,QUESTIONS_COL));
+    const archived=snap.docs.map(d=>({...d.data(),id:d.id})).filter(q=>q.deleted && q.mergeToken);
+    box.replaceChildren();
+    const note=document.createElement("p");
+    note.textContent="정리한 문항 "+archived.length+"개. 복구하면 원문이 목록에 다시 나타납니다. 다른 문항에 합쳐진 사용 이력은 유지됩니다.";
+    box.append(note);
+    for(const q of archived){
+      const row=document.createElement("div"); row.className="dupBox";
+      const label=document.createElement("p"); label.textContent=q.id+" → "+q.mergedInto+" · "+q.stem;
+      const restore=document.createElement("button"); restore.className="btn ghost small"; restore.textContent=q.id+" 복구";
+      restore.onclick=async()=>{
+        restore.disabled=true;
+        try {
+          await runTransaction(db,async tx=>{
+            const ref=doc(db,QUESTIONS_COL,q.id), current=await tx.get(ref);
+            if(!current.exists() || !current.data().deleted || current.data().mergeToken!==q.mergeToken) throw new Error("문항 상태가 변경됐습니다. 다시 확인해주세요.");
+            tx.update(ref,{deleted:false,mergedInto:null,mergeToken:null,updatedAt:Date.now()});
+          });
+          label.textContent=q.id+" 복구 완료";
+        } catch(e){label.textContent=e.message;restore.disabled=false;}
+      };
+      row.append(label,restore); box.append(row);
+    }
+  } catch(e){box.textContent="정리한 문항을 불러오지 못했습니다. 다시 시도해주세요.";}
+});
 
 document.getElementById("scanDuplicates").addEventListener("click", async ()=>{
   const button = document.getElementById("scanDuplicates");
@@ -123,10 +157,14 @@ document.getElementById("scanDuplicates").addEventListener("click", async ()=>{
       const title = document.createElement("summary");
       title.textContent = match.a.id + " ↔ " + match.b.id + " · 유사도 " + Math.round(match.sim*100) + "%";
       row.append(title);
+      const differences = document.createElement("p");
+      const fields = contentDifferences(match.a, match.b);
+      differences.textContent = fields.length ? "다른 항목: " + fields.join(", ") + ". 남길 문항의 내용이 유지됩니다. 첨부자료는 각 문항의 상세 확인에서 볼 수 있습니다." : "발문·지문·보기·정답·첨부자료·해설이 같습니다.";
+      row.append(differences);
       for(const q of [match.a, match.b]){
         const content = document.createElement("pre");
         content.style.cssText = "white-space:pre-wrap;font:inherit";
-        content.textContent = [q.id + " · " + (q.source || ""), q.stem, q.passage, ...(q.choices || []).map((c,i)=>(i+1)+". "+c)].filter(Boolean).join("\n");
+        content.textContent = [q.id + " · " + (q.source || ""), q.stem, q.passage, ...(q.choices || []).map((c,i)=>(i+1)+". "+c), "정답: " + (q.answer || "미입력"), "이미지 " + (q.images||[]).length + "개 · 표/그래프 " + (q.dataBlocks||[]).length + "개", "사용 이력 " + (q.usageLog||[]).length + "건"].filter(Boolean).join("\n");
         const open = document.createElement("button");
         open.className = "btn ghost small";
         open.textContent = q.id + " 상세 확인";
@@ -139,6 +177,49 @@ document.getElementById("scanDuplicates").addEventListener("click", async ()=>{
         };
         row.append(content, open);
       }
+      const actions = document.createElement("div");
+      actions.className = "dupBtns";
+      const status = document.createElement("p");
+      status.setAttribute("role", "status");
+      for(const [keep, drop] of [[match.a,match.b],[match.b,match.a]]){
+        const merge = document.createElement("button");
+        merge.className = "btn primary small";
+        merge.textContent = keep.id + " 남기고 이력 합치기";
+        merge.onclick = async ()=>{
+          if(!confirm(keep.id + "의 내용을 유지하고 사용 이력을 합칩니다.\n" + drop.id + "는 목록에서 제외하며 원문은 복구할 수 있도록 보관합니다.\n" + (fields.length ? "서로 다른 항목: " + fields.join(", ") + "\n" : "") + "이대로 정리할까요?")) return;
+          actions.querySelectorAll("button").forEach(b=>b.disabled=true);
+          status.textContent = "정리 중...";
+          const token = crypto.randomUUID();
+          try {
+            await runTransaction(db, async tx=>{
+              const kr=doc(db,QUESTIONS_COL,keep.id), dr=doc(db,QUESTIONS_COL,drop.id);
+              const ks=await tx.get(kr), ds=await tx.get(dr);
+              if(!ks.exists() || !ds.exists()) throw new Error("문항이 없습니다. 다시 검사해주세요.");
+              const k={...ks.data(),id:keep.id}, d={...ds.data(),id:drop.id};
+              if(contentDifferences(k,keep).length || contentDifferences(d,drop).length) throw new Error("검사 후 내용이 변경됐습니다. 다시 검사하고 확인해주세요.");
+              const patch=mergePatches(k,d,token,Date.now());
+              tx.update(kr,patch.keep); tx.update(dr,patch.drop);
+            });
+            status.textContent = "완료: " + keep.id + "에 사용 이력을 합치고 " + drop.id + "를 목록에서 제외했습니다. 겹치는 다른 후보는 다시 검사해주세요.";
+            const undo=document.createElement("button");
+            undo.className="btn ghost small"; undo.textContent=drop.id+" 원문 복구";
+            undo.onclick=async()=>{
+              undo.disabled=true;
+              try {
+                await runTransaction(db,async tx=>{
+                  const ref=doc(db,QUESTIONS_COL,drop.id), snap=await tx.get(ref);
+                  if(!snap.exists() || !snap.data().deleted || snap.data().mergeToken!==token) throw new Error("문항 상태가 변경되어 복구할 수 없습니다.");
+                  tx.update(ref,{deleted:false,mergedInto:null,mergeToken:null,updatedAt:Date.now()});
+                });
+                status.textContent=drop.id+" 원문을 복구했습니다. 합쳐진 사용 이력은 "+keep.id+"에도 유지됩니다.";
+              } catch(e){status.textContent=e.message; undo.disabled=false;}
+            };
+            actions.append(undo);
+          } catch(e){status.textContent="정리하지 못했습니다: "+e.message; actions.querySelectorAll("button").forEach(b=>b.disabled=false);}
+        };
+        actions.append(merge);
+      }
+      row.append(actions,status);
       box.append(row);
     }
   } catch(e){ box.textContent = "중복 검사를 완료하지 못했습니다. 다시 시도해주세요."; }
