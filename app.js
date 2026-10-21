@@ -1,3 +1,4 @@
+import { SIM_THRESHOLD, questionSimilarity, bestDuplicate } from "./duplicate-check.mjs";
 import { firebaseConfig } from "./firebase-config.js";
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
@@ -5,7 +6,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc,
-  onSnapshot, query, orderBy
+  onSnapshot, getDocsFromServer
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const app = initializeApp(firebaseConfig);
@@ -13,7 +14,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 const QUESTIONS_COL = "questions";
-const SIM_THRESHOLD = 0.70;
+
 
 const DOMAIN_CODE = {
   "의사소통능력":"COM","수리능력":"NUM","문제해결능력":"PSV","자원관리능력":"RES","기술능력":"TEC",
@@ -31,30 +32,6 @@ let allQuestions = [];      // live cache from Firestore onSnapshot
 let currentList = [];
 let detailIdx = 0;
 let selectedIds = new Set();
-
-// ---------- similarity ----------
-function normalize(s){ return (s||"").replace(/\s+/g,"").replace(/[.,!?()\[\]{}'"“”·※\-–—:;=]/g,"").toLowerCase(); }
-function bigramCounts(s){
-  const t = normalize(s); const m = new Map();
-  for(let i=0;i<t.length-1;i++){ const g=t.substr(i,2); m.set(g,(m.get(g)||0)+1); }
-  return m;
-}
-function diceSim(a,b){
-  const ga=bigramCounts(a), gb=bigramCounts(b);
-  if(ga.size===0||gb.size===0) return 0;
-  let inter=0;
-  for(const [g,c] of ga){ if(gb.has(g)) inter+=Math.min(c,gb.get(g)); }
-  const ta=[...ga.values()].reduce((x,y)=>x+y,0), tb=[...gb.values()].reduce((x,y)=>x+y,0);
-  return (2*inter)/(ta+tb);
-}
-function combinedText(q){ return (q.stem||"")+" "+(q.passage||""); }
-
-function imageIdsOf(imgArr){
-  return (imgArr||[]).map(u=>extractDriveId(u) || u).filter(Boolean);
-}
-function combinedSimilarity(newText, newImages, q){
-  return diceSim(newText, combinedText(q));
-}
 
 // ---------- auth ----------
 const loginOverlay = document.getElementById("loginOverlay");
@@ -80,6 +57,8 @@ onAuthStateChanged(auth, (user)=>{
     document.getElementById("userEmailTag").textContent = user.email;
     startListening();
   } else {
+    if(unsub) { unsub(); unsub = null; }
+    allQuestions = [];
     loginOverlay.style.display = "flex";
     appRoot.style.display = "none";
   }
@@ -89,11 +68,22 @@ onAuthStateChanged(auth, (user)=>{
 let unsub = null;
 function startListening(){
   if(unsub) return;
-  const q = query(collection(db, QUESTIONS_COL), orderBy("id"));
+  const q = collection(db, QUESTIONS_COL);
   unsub = onSnapshot(q, (snap)=>{
-    allQuestions = snap.docs.map(d=>d.data()).filter(x=>!x.deleted);
+    allQuestions = snap.docs.map(d=>({...d.data(), id:d.id})).filter(x=>!x.deleted).sort((a,b)=>a.id.localeCompare(b.id));
     renderTable();
   });
+}
+
+async function refreshQuestions(){
+  // Fail closed: an unavailable server must never mean "no duplicates".
+  const snap = await getDocsFromServer(collection(db, QUESTIONS_COL));
+  allQuestions = snap.docs.map(d=>({...d.data(), id:d.id})).filter(q=>!q.deleted);
+  renderTable();
+}
+async function ensureDuplicateData(box){
+  try { await refreshQuestions(); return true; }
+  catch(e) { box.textContent = "기존 문항을 불러오지 못해 중복 검사를 중단했습니다. 연결을 확인하고 다시 시도해주세요."; return false; }
 }
 
 function nextIdFor(domain){
@@ -103,6 +93,57 @@ function nextIdFor(domain){
   const maxN = nums.length ? Math.max(...nums) : 0;
   return code+"-"+String(maxN+1).padStart(4,"0");
 }
+
+document.getElementById("scanDuplicates").addEventListener("click", async ()=>{
+  const button = document.getElementById("scanDuplicates");
+  const box = document.getElementById("duplicateAudit");
+  button.disabled = true;
+  box.textContent = "등록된 전체 문항을 불러오는 중...";
+  try {
+    if(!await ensureDuplicateData(box)) return;
+    const questions = allQuestions.slice();
+    const matches = [];
+    for(let i=0; i<questions.length; i++){
+      for(let j=i+1; j<questions.length; j++){
+        const sim = questionSimilarity(questions[i], questions[j]);
+        if(sim >= SIM_THRESHOLD) matches.push({a:questions[i], b:questions[j], sim});
+      }
+      if(i % 10 === 0){
+        box.textContent = "전체 " + questions.length + "개 중 " + (i+1) + "개 검사 중...";
+        await new Promise(resolve=>setTimeout(resolve, 0));
+      }
+    }
+    box.replaceChildren();
+    const summary = document.createElement("p");
+    summary.textContent = "전체 " + questions.length + "개 검사 완료 · 중복 의심 " + matches.length + "쌍. 내용을 비교해 확인해주세요. 자동 삭제하지 않습니다.";
+    box.append(summary);
+    for(const match of matches.sort((a,b)=>b.sim-a.sim)){
+      const row = document.createElement("details");
+      row.className = "dupBox";
+      const title = document.createElement("summary");
+      title.textContent = match.a.id + " ↔ " + match.b.id + " · 유사도 " + Math.round(match.sim*100) + "%";
+      row.append(title);
+      for(const q of [match.a, match.b]){
+        const content = document.createElement("pre");
+        content.style.cssText = "white-space:pre-wrap;font:inherit";
+        content.textContent = [q.id + " · " + (q.source || ""), q.stem, q.passage, ...(q.choices || []).map((c,i)=>(i+1)+". "+c)].filter(Boolean).join("\n");
+        const open = document.createElement("button");
+        open.className = "btn ghost small";
+        open.textContent = q.id + " 상세 확인";
+        open.onclick = async ()=>{
+          await flushDetailEdits();
+          currentList = allQuestions.slice();
+          detailIdx = currentList.findIndex(item=>item.id===q.id);
+          if(detailIdx < 0){ alert("해당 문항이 삭제되었습니다. 다시 검사해주세요."); return; }
+          showDetailView();
+        };
+        row.append(content, open);
+      }
+      box.append(row);
+    }
+  } catch(e){ box.textContent = "중복 검사를 완료하지 못했습니다. 다시 시도해주세요."; }
+  finally { button.disabled = false; }
+});
 
 // 문항의 영역을 바꿔도 ID 앞자리(영역 코드)는 처음 만들어질 때 값 그대로 남아있는다.
 // (Firestore는 문서 ID를 그 자리에서 바로 못 바꾸기 때문에, 새 ID로 문서를 새로 만들고
@@ -290,6 +331,7 @@ async function addNew(form){
     createdAt: Date.now(), updatedAt: Date.now()
   };
   await setDoc(doc(db, QUESTIONS_COL, id), docData);
+  allQuestions = allQuestions.filter(q=>q.id!==id).concat(docData);
   return id;
 }
 
@@ -1416,9 +1458,15 @@ document.getElementById("f_manualReplaceSameBtn").addEventListener("click", runM
 document.getElementById("f_manualReplaceVersionBtn").addEventListener("click", runManualVersionReplace);
 
 document.getElementById("checkAndUpload").addEventListener("click", async ()=>{
+  const button = document.getElementById("checkAndUpload");
+  if(button.disabled) return;
+  button.disabled = true;
+  try {
   const form = readForm();
   const resBox = document.getElementById("checkResult"); resBox.innerHTML="";
   if(!form.stem){ resBox.innerHTML='<div class="dupBox"><b>문제(발문)를 입력해 주세요.</b></div>'; return; }
+
+  if(!await ensureDuplicateData(resBox)) return;
 
   if(editingId){
     const result = await applyReplace(editingId, form);
@@ -1429,9 +1477,7 @@ document.getElementById("checkAndUpload").addEventListener("click", async ()=>{
     return;
   }
 
-  let best={sim:0,q:null};
-  const newText = form.stem+" "+form.passage;
-  allQuestions.forEach(q=>{ const sim=combinedSimilarity(newText, form.images, q); if(sim>best.sim) best={sim,q}; });
+  const best = bestDuplicate(form, allQuestions);
 
   if(best.sim >= SIM_THRESHOLD){
     resBox.innerHTML =
@@ -1463,6 +1509,9 @@ document.getElementById("checkAndUpload").addEventListener("click", async ()=>{
   await addNew(form);
   resBox.innerHTML = '<div class="okBox">✓ 새 문제로 등록되었습니다.</div>';
   setTimeout(()=>overlaySingle.classList.remove("open"), 700);
+  } catch(e){
+    document.getElementById("checkResult").textContent = "등록하지 못했습니다. 연결을 확인하고 다시 시도해주세요.";
+  } finally { button.disabled = false; }
 });
 
 // ---------- file upload: auto-extract text from PDF/DOCX ----------
@@ -1913,7 +1962,9 @@ function parseExamText(rawText, fallbackDomain, source, fallbackType, fallbackSu
 }
 
 let batchParsed = [];
-document.getElementById("parseBatch").addEventListener("click", ()=>{
+document.getElementById("parseBatch").addEventListener("click", async ()=>{
+  document.getElementById("batchConfirmRow").style.display="none";
+  if(!await ensureDuplicateData(document.getElementById("batchResult"))) return;
   const raw = document.getElementById("batchInput").value;
 
   if(batchMode === "auto"){
@@ -1940,12 +1991,10 @@ document.getElementById("parseBatch").addEventListener("click", ()=>{
     : '';
 
   resBox.innerHTML = guessNote + batchParsed.map((item,i)=>{
-    const newText = item.stem+" "+item.passage;
-    let best={sim:0,q:null};
-    allQuestions.forEach(q=>{ const sim=combinedSimilarity(newText, item.images, q); if(sim>best.sim) best={sim,q}; });
+    let best = bestDuplicate(item, allQuestions);
     for(let j=0;j<i;j++){
       const other = batchParsed[j];
-      const sim = combinedSimilarity(newText, item.images, {stem:other.stem, passage:other.passage, images:other.images});
+      const sim = questionSimilarity(item, other);
       if(sim>best.sim) best={sim, q:{id:"(배치 내 "+(j+1)+"번)", domain:other.domain, stem:other.stem}};
     }
     item._dup = best.sim >= SIM_THRESHOLD;
@@ -2114,6 +2163,12 @@ document.getElementById("parseBatch").addEventListener("click", ()=>{
 });
 
 document.getElementById("registerAllOk").addEventListener("click", async ()=>{
+  const button = document.getElementById("registerAllOk");
+  if(button.disabled) return;
+  button.disabled = true;
+  try {
+  if(!await ensureDuplicateData(document.getElementById("batchResult"))) return;
+  let duplicateCount = 0;
   const uInst = document.getElementById("batch_usageInst").value.trim();
   const uWhen = document.getElementById("batch_usageWhen").value.trim();
   const uGrade = document.getElementById("batch_usageGrade").value.trim();
@@ -2121,11 +2176,21 @@ document.getElementById("registerAllOk").addEventListener("click", async ()=>{
   let count = 0;
   for(const item of batchParsed){
     if(item._skip) continue;
-    if(item._dup && !item._forceAdd) continue;
+    const match = bestDuplicate(item, allQuestions);
+    if(!item._forceAdd && match.sim >= SIM_THRESHOLD){
+      duplicateCount++;
+      const row = document.querySelector('.batchItem[data-idx="'+batchParsed.indexOf(item)+'"]');
+      if(row) { row.classList.add("dup"); row.querySelector(".status").textContent = "등록 제외: 기존 " + match.q.id + " · 중복 의심 " + Math.round(match.sim*100) + "%"; }
+      continue;
+    }
     const hasImage = (item.images||[]).length > 0;
     await addNew({domain:item.domain, source:item.source, stem:item.stem, passage:item.passage, choices:item.choices, answer:item.answer, difficulty:item.difficulty, type:item.type||"미정", subType:item.subType||"", images:item.images||[], usageLog: commonUsageLog, needsImage: item.needsImage && !hasImage, examQuestionNumber: (item.examQuestionNumber!==undefined ? item.examQuestionNumber : null)});
+    item._skip = true;
     count++;
   }
-  document.getElementById("batchResult").innerHTML += '<div class="okBox">✓ 총 '+count+'개 문항이 등록되었습니다.</div>';
+  document.getElementById("batchResult").innerHTML += '<div class="okBox">✓ 총 '+count+'개 문항이 등록되었습니다. 중복 의심 '+duplicateCount+'개는 등록하지 않았습니다.</div>';
   document.getElementById("batchConfirmRow").style.display="none";
+  } catch(e) {
+    alert("일부 문항을 등록하지 못했습니다. 다시 시도하면 등록이 완료된 문항은 건너뜁니다.");
+  } finally { button.disabled = false; }
 });
