@@ -1667,7 +1667,18 @@ function parseFileNameMeta(filename){
     result.when = dateMatch[1]+"년 "+dateMatch[2]+"월 "+dateMatch[3]+"일";
   } else {
     const semMatch = base.match(/(\d{4})\s*년\s*(\d)\s*학기/);
+    const ymMatch = base.match(/(\d{4})\s*년\s*(\d{1,2})\s*월/);
+    // 파일명 속 날짜 코드: 20250304 또는 250304 (앞뒤가 숫자가 아닌 경우만)
+    const ymd8 = base.match(/(?:^|[^\d])(20\d{2})(0[1-9]|1[0-2])([0-2]\d|3[01])(?!\d)/);
+    const ymd6 = base.match(/(?:^|[^\d])(2\d)(0[1-9]|1[0-2])([0-2]\d|3[01])(?!\d)/);
     if(semMatch) result.when = semMatch[1]+"년 "+semMatch[2]+"학기";
+    else if(ymMatch) result.when = ymMatch[1]+"년 "+parseInt(ymMatch[2],10)+"월";
+    else if(ymd8) result.when = ymd8[1]+"년 "+parseInt(ymd8[2],10)+"월";
+    else if(ymd6) result.when = "20"+ymd6[1]+"년 "+parseInt(ymd6[2],10)+"월";
+    else if(base.match(/(?:^|[^\d])(20\d{2})(0[1-9]|1[0-2])(?!\d)/)){
+      const ym6 = base.match(/(?:^|[^\d])(20\d{2})(0[1-9]|1[0-2])(?!\d)/);
+      result.when = ym6[1]+"년 "+parseInt(ym6[2],10)+"월";
+    }
     else{
       const yearOnly = base.match(/(\d{4})\s*년/);
       if(yearOnly) result.when = yearOnly[1]+"년";
@@ -1814,7 +1825,7 @@ function parseBlock(text){
 const NOISE_PATTERNS = [
   /^직업기초능력평가$/, /NCS\s*실전모의고사/, /^혼합형/, /^학교맞춤/, /^Copyright/i,
   /^\(계속\s*\)$/, /^\(\s*\)$/, /^-\s*끝\s*-$/, /^문제의 답을 다시/, /^문항\s*수/, /^시험시간/, /^\d+\/\d+$/,
-  /^:\s*\d+$/, /^&?PSAT$/i, /^이\s*름\s*점\s*수$/
+  /^:\s*\d+$/, /^&?PSAT$/i, /^이\s*름\s*점\s*수$/, /^BIG\s*[34]$/i, /^:\s*\d+\s*\d+\s*\/\s*\d+$/
 ];
 const DOMAIN_NAMES = Object.keys(DOMAIN_CODE);
 function detectDomainHeader(line){
@@ -1830,9 +1841,17 @@ const CIRCLED_MARKS = ["①","②","③","④","⑤"];
 const CIRCLED_SPLIT_RE = /([①②③④⑤])/;
 
 const IMAGE_KEYWORDS = ["그림", "사진", "도표", "배치도", "구성도", "회로도", "도면", "이미지"];
-function detectNeedsImage(stem, passage){
+function detectNeedsImage(stem, passage, choices){
   const combined = (stem||"") + " " + (passage||"");
   if(IMAGE_KEYWORDS.some(kw=>combined.includes(kw))) return true;
+  // 그래프·표를 보고 푸는 문항 (표는 PDF 추출 시 줄이 섞이므로 HTML 표로 다시 넣어야 함)
+  if(/그래프/.test(stem||"")) return true;
+  if(/(다음|아래|위|주어진)\s*(의\s*)?<?\s*표[를는의에와]?\s|<\s*표\s*>|\[\s*표\s*\]/.test(stem||"")) return true;
+  // "다음은 ~이다"라고 자료를 가리키는데 지문 글자가 거의 없으면 그림/사진이라 추출되지 않은 것
+  if((passage||"").trim().length < 15 && /(다음|아래)(은|는)\s/.test(stem||"") && !/설명(이다|한\s*것)/.test(stem||"")) return true;
+  // 보기가 "×", "÷" 같은 기호만 남았으면 수식(분수 등)이 PDF에서 글자로 추출되지 않은 것
+  const symbolOnly = (choices||[]).filter(c=>!/[가-힣A-Za-z0-9]/.test(String(c))).length;
+  if(symbolOnly >= 3 && (passage||"").trim().length < 15) return true;
   const captionMatch = (passage||"").match(/<[^<>]{2,40}>/g);
   if(captionMatch){
     const lastCaption = captionMatch[captionMatch.length-1];
@@ -1950,7 +1969,7 @@ function parseExamText(rawText, fallbackDomain, source, fallbackType, fallbackSu
         choices: choices.map(c=>c.trim()).filter(Boolean),
         answer: "", difficulty: "미정",
         type: fallbackType || "미정", subType: fallbackSubType || "",
-        needsImage: detectNeedsImage(stem, passage),
+        needsImage: detectNeedsImage(stem, passage, choices),
         examQuestionNumber: foundNum,
         _domainGuessed: !anyDomainHeaderSeen
       });
@@ -1962,16 +1981,27 @@ function parseExamText(rawText, fallbackDomain, source, fallbackType, fallbackSu
     choices = [];
     expectingIdx = 0;
     choicesComplete = false;
+    listNumBefore = null;
   }
 
-  lines.forEach(trimmed=>{
+  let listNumBefore = null;
+  // 다음 ① 줄이 나오기 전(최대 8줄)에 '?'가 있으면 진짜 문항 발문으로 본다
+  function questionMarkAhead(fromIdx){
+    for(let k=fromIdx; k<lines.length && k<fromIdx+8; k++){
+      if(k>fromIdx && lines[k].startsWith(CIRCLED_MARKS[0])) break;
+      if(lines[k].includes("?")) return true;
+    }
+    return false;
+  }
+
+  lines.forEach((trimmed, li)=>{
     if(isNoise(trimmed)){
       if(choicesComplete) finalizeQuestion();
       return;
     }
     const domHeader = detectDomainHeader(trimmed);
     if(domHeader){
-      if(choicesComplete) finalizeQuestion();
+      if(choicesComplete || choices.length>=3) finalizeQuestion();
       currentDomain = domHeader;
       anyDomainHeaderSeen = true;
       return;
@@ -2005,25 +2035,33 @@ function parseExamText(rawText, fallbackDomain, source, fallbackType, fallbackSu
       }
     }
 
-    if(trimmed.startsWith(CIRCLED_MARKS[0]) && (choicesComplete || expectingIdx>0)){
-      choices = [];
-      expectingIdx = 0;
-      choicesComplete = false;
-    }
-
-    if(choicesComplete){
+    // 보기가 다 모였거나(5개), 참/거짓/알 수 없음처럼 3개 이상 모였을 때 다음 번호가 나오면 새 문항 후보
+    if(choicesComplete || (choices.length>=3 && expectingIdx>=3)){
       const m = trimmed.match(/^(\d{1,3})[.\)]\s*\S/);
       if(m){
         const n = parseInt(m[1],10);
         const curNum = numberOf(pending);
         const expected = (curNum!==null ? curNum : lastQNum);
-        if(expected!==null && n===expected+1){
+        const isListItem = listNumBefore===n-1 && !questionMarkAhead(li);
+        if(expected!==null && n===expected+1 && !isListItem){
           finalizeQuestion();
           pending.push(trimmed);
           return;
         }
       }
     }
+
+    // 법조문처럼 ①~⑤가 반복되면, 앞의 ①~⑤는 지문으로 되돌리고 마지막 묶음을 보기로 사용
+    if(trimmed.startsWith(CIRCLED_MARKS[0]) && (choicesComplete || expectingIdx>0)){
+      choices.forEach((c,k)=>pending.push(CIRCLED_MARKS[k]+c));
+      choices = [];
+      expectingIdx = 0;
+      choicesComplete = false;
+    }
+
+    // 지문 속 "1. 2. 3." 같은 번호 목록 추적 (새 문항 번호와 구분하기 위함)
+    const listM = trimmed.match(/^(\d{1,3})[.\)]\s*\S/);
+    if(listM && numberOf(pending)!==null) listNumBefore = parseInt(listM[1],10);
 
     const splitResult = !choicesComplete ? trySplitChoices(trimmed, expectingIdx) : null;
     if(splitResult && splitResult.texts.length>0){
