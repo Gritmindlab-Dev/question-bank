@@ -1825,7 +1825,7 @@ function parseBlock(text){
 const NOISE_PATTERNS = [
   /^직업기초능력평가$/, /NCS\s*실전모의고사/, /^혼합형/, /^학교맞춤/, /^Copyright/i,
   /^\(계속\s*\)$/, /^\(\s*\)$/, /^-\s*끝\s*-$/, /^문제의 답을 다시/, /^문항\s*수/, /^시험시간/, /^\d+\/\d+$/,
-  /^:\s*\d+$/, /^&?PSAT$/i, /^이\s*름\s*점\s*수$/, /^BIG\s*[34]$/i, /^:\s*\d+\s*\d+\s*\/\s*\d+$/
+  /^:\s*\d+$/, /^&?PSAT$/i, /^이\s*름\s*점\s*수$/, /^BIG\s*[34]$/i, /^영역구분형$/,/^:\s*\d+\s*\d+\s*\/\s*\d+$/
 ];
 const DOMAIN_NAMES = Object.keys(DOMAIN_CODE);
 function detectDomainHeader(line){
