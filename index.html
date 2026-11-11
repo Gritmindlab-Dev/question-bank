@@ -137,6 +137,10 @@ table.dataTable td{color:#333B4D;}
 .choiceRow .cmark{font-family:var(--mono);font-weight:700;color:var(--ring);width:18px;flex-shrink:0;}
 .formgrid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
 .modalbtns{display:flex;gap:10px;margin-top:16px;}
+.usecell{min-width:150px;max-width:230px;line-height:1.9;}
+.usechip{display:inline-block;font-size:11px;font-weight:600;color:#2f4b8a;background:#e8eefb;border-radius:999px;padding:1px 8px;margin:1px 3px 1px 0;white-space:nowrap;}
+.usechip.noinst{color:var(--muted);background:#f1f1f1;font-weight:500;}
+.usechip.more{color:var(--muted);background:transparent;border:1px solid var(--line);}
 .dupBox{border:1.5px solid var(--danger);background:var(--danger-bg);border-radius:10px;padding:14px 16px;margin-top:14px;font-size:12.5px;line-height:1.6;}
 .dupBox b{color:var(--danger);}
 .dupBtns{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;}
@@ -204,6 +208,7 @@ table.dataTable td{color:#333B4D;}
       <select id="sourceFilter"><option value="">출처(모의고사) 전체</option></select>
       <select id="diffFilter"><option value="">난이도 전체</option><option>하</option><option>중</option><option>상</option><option>미정</option></select>
       <select id="typeFilter"><option value="">유형 전체</option><option>모듈</option><option>피듈</option><option>피셋</option><option>직무</option><option>미정</option></select>
+      <select id="usageFilter"><option value="">사용기관 전체</option></select>
       <select id="imgNeedFilter"><option value="">이미지 전체</option><option value="needed">🖼 이미지 필요만</option></select>
       <button class="btn primary small" id="searchApplyBtn">검색</button>
       <button class="btn ghost small" id="scanDuplicates">등록된 문제 중복 검사</button>
@@ -552,6 +557,6 @@ table.dataTable td{color:#333B4D;}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-<script type="module" src="./app.js?v=20261111-hwpx-2"></script>
+<script type="module" src="./app.js?v=20261111-usage-1"></script>
 </body>
 </html>

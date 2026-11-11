@@ -563,6 +563,14 @@ function renderStats(){
   srcSel.innerHTML = '<option value="">출처(모의고사) 전체</option>' + distinctSources.map(s=>'<option value="'+s.replace(/"/g,'&quot;')+'">'+s+'</option>').join('');
   srcSel.value = curSrc;
 
+  // 사용기관 필터: 기관마다 "사용한 문항 / 사용 안 한 문항"
+  const usSel = document.getElementById("usageFilter");
+  const curUs = usSel.value;
+  const insts = [...new Set(allQuestions.flatMap(q=>(q.usageLog||[]).map(u=>(u.institution||"").trim())).filter(Boolean))].sort((a,b)=>shortInst(a).localeCompare(shortInst(b)));
+  usSel.innerHTML = '<option value="">사용기관 전체</option><option value="none">사용이력 없음</option>' +
+    insts.map(i=>{ const v=i.replace(/"/g,'&quot;'), s=shortInst(i); return '<option value="use:'+v+'">'+s+' 사용</option><option value="not:'+v+'">'+s+' 미사용</option>'; }).join('');
+  usSel.value = curUs;
+
   document.getElementById("statrow").querySelectorAll("button[data-statdom]").forEach(btn=>{
     btn.addEventListener("click", ()=>{
       const dom = btn.getAttribute("data-statdom");
@@ -594,6 +602,13 @@ function getFiltered(){
   if(diff) list = list.filter(x=>(x.difficulty||"미정")===diff);
   if(type) list = list.filter(x=>(x.type||"미정")===type);
   if(imgNeed==="needed") list = list.filter(x=>x.needsImage && (x.images||[]).length===0);
+  const us = document.getElementById("usageFilter").value;
+  if(us){
+    const used = (x, inst) => (x.usageLog||[]).some(u=>(u.institution||"").trim()===inst);
+    if(us==="none") list = list.filter(x=>!(x.usageLog||[]).length);
+    else if(us.startsWith("use:")) list = list.filter(x=>used(x, us.slice(4)));
+    else if(us.startsWith("not:")) list = list.filter(x=>!used(x, us.slice(4)));
+  }
   if(q) list = list.filter(x => (x.id+" "+x.stem+" "+(x.passage||"")+" "+(x.source||"")+" "+(x.type||"")+" "+(x.subType||"")).toLowerCase().includes(q));
   if(src){
     list.sort((a,b)=>{
@@ -605,6 +620,20 @@ function getFiltered(){
   return list;
 }
 
+// 기관명 줄이기: 포항제철공업고등학교 → 포항제철공고, 경상국립대학교 → 경상국립대
+function shortInst(name){
+  return String(name||"").trim().replace(/공업고등학교$/,"공고").replace(/고등학교$/,"고").replace(/대학교$/,"대").replace(/중학교$/,"중");
+}
+// 시기 줄이기: "2024년 3월" → "24.3", "2025년" → "25"
+function shortWhen(w){
+  const m = String(w||"").match(/(\d{4})\s*년(?:\s*(\d{1,2})\s*월)?/);
+  return m ? m[1].slice(2) + (m[2] ? "."+parseInt(m[2],10) : "") : String(w||"").trim();
+}
+function usageChip(u){
+  const inst = shortInst(u.institution), when = shortWhen(u.when);
+  const label = [inst, when].filter(Boolean).join(" ") || "기록";
+  return '<span class="usechip'+(inst?'':' noinst')+'">'+label.replace(/</g,"&lt;")+'</span>';
+}
 function renderTable(){
   renderStats();
   const list = getFiltered();
@@ -622,7 +651,10 @@ function renderTable(){
     const stemShort = (q.stem||"").slice(0,45) + ((q.stem||"").length>45?"…":"");
     const imgCount = (q.images||[]).length;
     const usage = q.usageLog||[];
-    const usageShort = usage.length ? usage.map(u=>u.institution).filter(Boolean).join(', ') : '-';
+    const usageFull = usage.map(u=>[u.institution, u.when, u.grade].filter(Boolean).join(' ')).filter(Boolean).join('\n');
+    const whenKey = u => { const m = String(u.when||"").match(/(\d{4})\s*년(?:\s*(\d{1,2})\s*월)?/); return m ? (+m[1])*100 + (+(m[2]||0)) : 0; };
+    const chips = usage.slice().sort((a,b)=>whenKey(b)-whenKey(a)).map(usageChip); // 최근 사용이 앞에
+    const usageHtml = chips.length ? chips.slice(0,3).join('') + (chips.length>3 ? '<span class="usechip more">+'+(chips.length-3)+'</span>' : '') : '-';
     const checked = selectedIds.has(q.id) ? 'checked' : '';
     return '<tr>'+
       '<td><input type="checkbox" class="rowCheck" data-id="'+q.id+'" '+checked+'></td>'+
@@ -634,7 +666,7 @@ function renderTable(){
       '<td>'+ (q.difficulty||"미정") +'</td>'+
       '<td class="idcell">'+ (q.answer||"-") +'</td>'+
       '<td style="font-size:11.5px;color:var(--muted);">'+ (q.source||"-") +'</td>'+
-      '<td style="font-size:11.5px;color:var(--muted);max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="'+usageShort.replace(/"/g,'&quot;')+'">'+usageShort+'</td>'+
+      '<td class="usecell" title="'+usageFull.replace(/"/g,'&quot;')+'">'+usageHtml+'</td>'+
       '<td class="imgbadge">'+ (imgCount>0 ? ('🖼 '+imgCount) : (q.needsImage ? '<span style="color:var(--warn);font-weight:700;">⚠ 필요</span>' : '-')) +'</td>'+
       '<td class="actioncell">'+
         '<button class="btn small ghost" data-act="view" data-id="'+q.id+'">보기</button>'+
