@@ -66,6 +66,13 @@ test('이미지 감지: 오탐 방지', () => {
   assert.equal(P.detectNeedsImage('다음 표를 보고 ㉠에 들어갈 값은?', '연도 2020 2021', ['1', '2', '3', '4', '5']), true);
 });
 
+test('이미지 감지: 글자로 풀린 표(단위 표기, 숫자 줄 여러 개)', () => {
+  const table = '구분 2021년 2022년 2023년\n배출량 9,800 8,600 8,000\n감축률 10 12.2 7';
+  assert.equal(P.detectNeedsImage('위 자료에 대한 설명으로 옳은 것은?', table + '\n합계 1 2 3', ['가', '나', '다', '라', '마']), true);
+  assert.equal(P.detectNeedsImage('위 자료에 대한 설명으로 옳은 것은?', '<판매 현황>\n(단위 : 대)\n선풍기 195', ['가', '나', '다', '라', '마']), true);
+  assert.equal(P.detectNeedsImage('다음 글의 제목은?', '2025년 3월 10일에 행사가 열렸다.\n참가자는 120명이었다.', ['가', '나', '다', '라', '마']), false);
+});
+
 test('파일명에서 기관·시기·학년 추출', () => {
   const m1 = P.parseFileNameMeta('NCS 모의고사 의수문 45제(포항제철공업고등학교)_250304 최종.pdf');
   assert.equal(m1.institution, '포항제철공업고등학교');

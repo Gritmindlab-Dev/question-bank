@@ -1849,6 +1849,10 @@ function detectNeedsImage(stem, passage, choices){
   if(/(다음|아래|위|주어진)\s*(의\s*)?<?\s*표[를는의에와]?\s|<\s*표\s*>|\[\s*표\s*\]/.test(stem||"")) return true;
   // "다음은 ~이다"라고 자료를 가리키는데 지문 글자가 거의 없으면 그림/사진이라 추출되지 않은 것
   if((passage||"").trim().length < 15 && /(다음|아래)(은|는)\s/.test(stem||"") && !/설명(이다|한\s*것)/.test(stem||"")) return true;
+  // 표가 글자로 풀려 들어온 지문: "(단위:" 표기, 또는 숫자가 3개 이상인 줄이 3줄 이상
+  if (/\(\s*단\s*위\s*[:：]/.test(passage||"")) return true;
+  const numericLines = (passage||"").split("\n").filter(l=>(l.match(/\d[\d,.]*/g)||[]).length>=3).length;
+  if (numericLines >= 3) return true;
   // 보기가 "×", "÷" 같은 기호만 남았으면 수식(분수 등)이 PDF에서 글자로 추출되지 않은 것
   const symbolOnly = (choices||[]).filter(c=>!/[가-힣A-Za-z0-9]/.test(String(c))).length;
   if(symbolOnly >= 3 && (passage||"").trim().length < 15) return true;
