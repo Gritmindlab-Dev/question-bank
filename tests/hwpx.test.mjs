@@ -28,6 +28,28 @@ test('특수문자는 이스케이프되고 문단·보기 번호가 붙는다',
   assert.equal((xml.match(/<hp:t>첫 줄이다\.<\/hp:t>|<hp:t>둘째 줄이다\.<\/hp:t>/g) || []).length, 2, '문장이 끝난 줄은 각각 문단');
 });
 
+test('머리말 상자: 문항 수·시험시간·제목이 바뀌고 쪽 번호(현재/전체)가 들어간다', () => {
+  const box = fs.readFileSync(new URL('../hwpx-template/header-box.xml', import.meta.url), 'utf8');
+  const sec = H.sectionXml(head, '제목', H.para('본문'), { headerBox: box, count: 45, time: 50, sub: '직업기초능력평가', ncs: 'NCS', bigTitle: ' 실전모의고사', badge1: '혼합형', badge2: '학교맞춤 영역별' });
+  assertWellFormed(sec);
+  assert.ok(sec.includes('문항 수: 45문항') && sec.includes('시험시간: 50분') && sec.includes('학교맞춤 영역별'));
+  assert.ok(sec.includes('numType="PAGE"') && sec.includes('numType="TOTAL_PAGE"'));
+  assert.ok(!sec.includes('{{'), '자리 표시가 남지 않음');
+  assert.ok(!sec.includes('<hp:t>제목</hp:t>'), '머리말이 있으면 별도 제목 줄은 생략');
+  assert.ok(sec.includes('<hp:margin header="9921"'), '머리말 자리만큼 위 여백 확보');
+  assert.ok(H.sectionXml(head, '제목', '').includes('<hp:margin header="1417"'), '머리말 없으면 좁은 여백');
+});
+
+test('2단: 단 수가 2로 바뀌고 표·상자 폭이 단 폭에 맞춰진다', () => {
+  const sec = H.sectionXml(head, '제목', '', { columns: 2 });
+  assert.ok(sec.includes('colCount="2"'));
+  const w2 = H.setColumns(2);
+  const tbl = H.tableXml([[{ text: 'a' }, { text: 'b' }]]);
+  assert.ok(+tbl.match(/<hp:sz width="(\d+)"/)[1] <= w2);
+  H.setColumns(1);
+  assert.ok(+H.tableXml([[{ text: 'a' }]]).match(/<hp:sz width="(\d+)"/)[1] > w2);
+});
+
 test('PDF에서 끊긴 줄은 이어 붙이고, 항목 표시 줄은 새 줄로', () => {
   const t = H.joinWrappedLines('상대방의 얼굴과\n몸의 움직임을 관찰해야\n한다.\n<보기>\nㄱ. 첫째\n㉠ 둘째 항목은 길어서\n다음 줄로 이어진다.\n※ 주석');
   assert.equal(t, '상대방의 얼굴과 몸의 움직임을 관찰해야 한다.\n<보기>\nㄱ. 첫째\n㉠ 둘째 항목은 길어서 다음 줄로 이어진다.\n※ 주석');

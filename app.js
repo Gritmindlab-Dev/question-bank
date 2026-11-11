@@ -1179,6 +1179,7 @@ document.getElementById("bulkHwpxBtn").addEventListener("click", ()=>{
   document.getElementById("hwpxStatus").textContent = "";
   overlayHwpx.classList.add("open");
 });
+document.getElementById("hwpx_header").addEventListener("change", e=>{ document.getElementById("hwpxHeaderFields").style.display = e.target.value === "1" ? "" : "none"; });
 document.getElementById("cancelHwpx").addEventListener("click", closeHwpx);
 document.getElementById("closeXHwpx").addEventListener("click", closeHwpx);
 overlayHwpx.addEventListener("click", e=>{ if(e.target===overlayHwpx) closeHwpx(); });
@@ -1198,9 +1199,15 @@ document.getElementById("runHwpx").addEventListener("click", async ()=>{
   }
   btn.disabled = true;
   try{
-    const { buildHwpx } = await import("./hwpx-export.mjs?v=20261111-2");
+    const { buildHwpx } = await import("./hwpx-export.mjs?v=20261111-4");
     const title = document.getElementById("hwpx_title").value.trim() || "그릿마인드랩 NCS 모의고사";
-    const blob = await buildHwpx(list, { title, answers: document.getElementById("hwpx_answers").value,
+    const val = id => document.getElementById(id).value;
+    // 큰 제목이 "NCS …"로 시작하면 원본처럼 "NCS"와 나머지를 나눠 넣음
+    const big = val("hwpx_big").trim(); const m = big.match(/^(NCS)(\s.*)$/);
+    const blob = await buildHwpx(list, { title, answers: val("hwpx_answers"),
+      columns: 1, header: val("hwpx_header") === "1",
+      sub: val("hwpx_sub").trim(), ncs: m ? m[1] : "", bigTitle: m ? m[2] : big,
+      badge1: val("hwpx_badge1").trim(), badge2: val("hwpx_badge2").trim(), time: val("hwpx_time") || 60,
       onProgress:(i,n)=>{ status.textContent = "만드는 중… "+i+" / "+n; } });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);

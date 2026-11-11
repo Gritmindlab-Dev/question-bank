@@ -17,7 +17,10 @@ export const STYLE = {
   boxTable: 2, boxCell: 10,            // 지문 상자 테두리
   headCell: 15, plainCell: 10          // 표 머리 칸(연한 파랑) / 일반 칸
 };
-const TEXT_WIDTH = 46488;              // 본문 폭(HWPUNIT, 틀의 지문 상자 폭)
+const FULL_WIDTH = 46488;              // 1단 본문 폭(HWPUNIT, 틀의 지문 상자 폭)
+const COL_GAP = 1134;                  // 2단일 때 단 사이 간격
+let TEXT_WIDTH = FULL_WIDTH;           // 현재 단 폭 (setColumns로 바꿈)
+export function setColumns(n) { TEXT_WIDTH = n === 2 ? Math.floor((48190 - COL_GAP) / 2) - 300 : FULL_WIDTH; return TEXT_WIDTH; }
 const CIRCLED = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
 
 export const xmlEsc = s => String(s ?? '').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')
@@ -34,7 +37,8 @@ let objId = 1100000000;
 const nextId = () => String(objId++);
 
 // 표: rows = [[{text, rowspan, colspan, head}|null, ...], ...] (null = 병합으로 가려진 칸)
-export function tableXml(rows, { width = TEXT_WIDTH, box = false } = {}) {
+export function tableXml(rows, { width, box = false } = {}) {
+  width = width || TEXT_WIDTH;
   const rowCnt = rows.length, colCnt = Math.max(...rows.map(r => r.length));
   const colW = Math.floor(width / colCnt), rowH = box ? 2000 : 1800;
   const trs = rows.map((r, i) => '<hp:tr>' + r.map((c, j) => {
@@ -50,7 +54,8 @@ export function tableXml(rows, { width = TEXT_WIDTH, box = false } = {}) {
 }
 
 // 그림: binId(매니페스트 id), 픽셀 크기
-export function picXml(binId, pxW, pxH, maxWidth = TEXT_WIDTH) {
+export function picXml(binId, pxW, pxH, maxWidth) {
+  maxWidth = maxWidth || TEXT_WIDTH;
   const orgW = Math.round(pxW * 75), orgH = Math.round(pxH * 75);
   const scale = Math.min(1, maxWidth / orgW), curW = Math.round(orgW * scale), curH = Math.round(orgH * scale);
   const pic = `<hp:pic id="${nextId()}" zOrder="0" numberingType="PICTURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="${nextId()}" reverse="0"><hp:offset x="0" y="0"/><hp:orgSz width="${orgW}" height="${orgH}"/><hp:curSz width="${curW}" height="${curH}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="${Math.round(curW / 2)}" centerY="${Math.round(curH / 2)}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="${scale.toFixed(6)}" e2="0" e3="0" e4="0" e5="${scale.toFixed(6)}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hc:img binaryItemIDRef="${binId}" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/><hp:imgRect><hc:pt0 x="0" y="0"/><hc:pt1 x="${orgW}" y="0"/><hc:pt2 x="${orgW}" y="${orgH}"/><hc:pt3 x="0" y="${orgH}"/></hp:imgRect><hp:imgClip left="0" right="${orgW}" top="0" bottom="${orgH}"/><hp:inMargin left="0" right="0" top="0" bottom="0"/><hp:imgDim dimwidth="${orgW}" dimheight="${orgH}"/><hp:effects/><hp:sz width="${curW}" widthRelTo="ABSOLUTE" height="${curH}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="0" right="0" top="0" bottom="0"/><hp:shapeComment>그림입니다.</hp:shapeComment></hp:pic>`;
@@ -62,7 +67,7 @@ export function blocksToXml(blocks) {
   return blocks.map(b => {
     if (b.type === 'p') return para(b.text, b.style || STYLE.body);
     if (b.type === 'table') return tableXml(b.rows);
-    if (b.type === 'pic') return picXml(b.binId, b.w, b.h, b.chart ? Math.round(TEXT_WIDTH * 0.62) : Math.round(TEXT_WIDTH * 0.8));
+    if (b.type === 'pic') return picXml(b.binId, b.w, b.h, b.chart ? Math.round(TEXT_WIDTH * (TEXT_WIDTH < FULL_WIDTH ? 1 : 0.62)) : Math.round(TEXT_WIDTH * (TEXT_WIDTH < FULL_WIDTH ? 1 : 0.8)));
     return '';
   }).join('');
 }
@@ -134,8 +139,17 @@ export function answersXml(list, { explanations = false } = {}) {
   return out.join('');
 }
 
-export function sectionXml(head, title, bodyXml) {
-  const first = `<hp:p id="0" paraPrIDRef="${STYLE.title.para}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${STYLE.title.char}">${head.secPr}${head.colCtrl}</hp:run><hp:run charPrIDRef="${STYLE.title.char}"><hp:t>${xmlEsc(title)}</hp:t></hp:run></hp:p>`;
+export function sectionXml(head, title, bodyXml, opts = {}) {
+  // 단 설정: 2단이면 단 수와 간격을 바꾸고 단 사이 선 표시
+  const colCtrl = opts.columns === 2 ? head.colCtrl.replace('colCount="1"', 'colCount="2"').replace('sameGap="0"', 'sameGap="' + COL_GAP + '"') : head.colCtrl;
+  // 머리말 상자(경상대 시험지와 같은 모양): 모든 쪽에, 쪽 번호는 "현재/전체"
+  const hb = opts.headerBox ? opts.headerBox.replace('{{COUNT}}', xmlEsc(opts.count)).replace('{{TIME}}', xmlEsc(opts.time || 60)).replace('{{SUB}}', xmlEsc(opts.sub ?? '직업기초능력평가'))
+    .replace('{{NCS}}', xmlEsc(opts.ncs ?? 'NCS')).replace('{{TITLE}}', xmlEsc(opts.bigTitle ?? ' 실전모의고사')).replace('{{BADGE1}}', xmlEsc(opts.badge1 ?? '혼합형')).replace('{{BADGE2}}', xmlEsc(opts.badge2 ?? '영역구분형'))
+    + '<hp:ctrl><hp:newNum num="1" numType="PAGE"/></hp:ctrl>' : '';
+  const titleRun = opts.headerBox ? '' : `<hp:run charPrIDRef="${STYLE.title.char}"><hp:t>${xmlEsc(title)}</hp:t></hp:run>`;
+  // 머리말을 넣으면 시험지 원래 머리말 여백(9921)을, 없으면 좁은 여백(1417)을 사용
+  const secPr = opts.headerBox ? head.secPr.replace(/(<hp:margin header=")\d+(")/, '$19921$2') : head.secPr;
+  const first = `<hp:p id="0" paraPrIDRef="${STYLE.title.para}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0"><hp:run charPrIDRef="${STYLE.title.char}">${secPr}${colCtrl}${hb}</hp:run>${titleRun}</hp:p>`;
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>${head.open}${first}${para('', STYLE.gap)}${bodyXml}</hs:sec>`;
 }
 
@@ -241,8 +255,9 @@ export async function buildHwpx(questions, opts = {}) {
   if (!JSZip) throw new Error('JSZip을 불러오지 못했어요');
   const base = opts.base || './hwpx-template/';
   const get = p => fetch(base + p).then(r => { if (!r.ok) throw new Error(p + ' 불러오기 실패'); return r.text(); });
-  const [header, version, container, manifest, rdf, headJson] = await Promise.all(['header.xml', 'version.xml', 'META-INF/container.xml', 'META-INF/manifest.xml', 'META-INF/container.rdf', 'section-head.json'].map(get));
+  const [header, version, container, manifest, rdf, headJson, headerBox] = await Promise.all(['header.xml', 'version.xml', 'META-INF/container.xml', 'META-INF/manifest.xml', 'META-INF/container.rdf', 'section-head.json', 'header-box.xml'].map(get));
   const head = JSON.parse(headJson);
+  setColumns(opts.columns === 2 ? 2 : 1);
   const bins = []; const addBin = (bytes, ext) => { const id = 'image' + (bins.length + 1); bins.push({ id, file: id + '.' + ext, mime: 'image/' + ext, bytes }); return id; };
   let body = '';
   const answerList = [];
@@ -260,7 +275,7 @@ export async function buildHwpx(questions, opts = {}) {
   add('mimetype', 'application/hwp+zip', { compression: 'STORE' }); // 반드시 첫 번째, 압축 없이
   add('version.xml', version);
   add('Contents/header.xml', header);
-  add('Contents/section0.xml', sectionXml(head, title, body));
+  add('Contents/section0.xml', sectionXml(head, title, body, { columns: opts.columns, headerBox: opts.header === false ? null : headerBox, count: questions.length, time: opts.time, sub: opts.sub, ncs: opts.ncs, bigTitle: opts.bigTitle, badge1: opts.badge1, badge2: opts.badge2 }));
   add('Contents/content.hpf', contentHpf(title, bins));
   add('settings.xml', SETTINGS_XML);
   add('META-INF/container.xml', container);
