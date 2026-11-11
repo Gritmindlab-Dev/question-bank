@@ -654,7 +654,10 @@ function renderTable(){
     const usageFull = usage.map(u=>[u.institution, u.when, u.grade].filter(Boolean).join(' ')).filter(Boolean).join('\n');
     const whenKey = u => { const m = String(u.when||"").match(/(\d{4})\s*년(?:\s*(\d{1,2})\s*월)?/); return m ? (+m[1])*100 + (+(m[2]||0)) : 0; };
     const chips = usage.slice().sort((a,b)=>whenKey(b)-whenKey(a)).map(usageChip); // 최근 사용이 앞에
-    const usageHtml = chips.length ? chips.join('') : '-'; // 모든 이력을 접지 않고 표시 (최근 순)
+    // 최근 3개만 보이고, "+N"을 누르면 나머지가 펼쳐짐 ("접기"로 다시 접기)
+    const usageHtml = !chips.length ? '-' : chips.slice(0,3).join('') + (chips.length>3
+      ? '<span class="usehidden" hidden>'+chips.slice(3).join('')+'</span><button type="button" class="usechip more" data-usetoggle="'+(chips.length-3)+'">+'+(chips.length-3)+'</button>'
+      : '');
     const checked = selectedIds.has(q.id) ? 'checked' : '';
     return '<tr>'+
       '<td><input type="checkbox" class="rowCheck" data-id="'+q.id+'" '+checked+'></td>'+
@@ -684,6 +687,15 @@ function renderTable(){
       if(act==="del"){
         if(confirm(id+" 문항을 삭제할까요? (전체 팀원 공용 데이터에서 삭제됩니다)")) deleteQuestion(id);
       }
+    });
+  });
+  tbody.querySelectorAll("button[data-usetoggle]").forEach(btn=>{
+    btn.addEventListener("click", e=>{
+      e.stopPropagation();
+      const hid = btn.previousElementSibling;
+      const open = hid.hasAttribute("hidden");
+      if(open) hid.removeAttribute("hidden"); else hid.setAttribute("hidden","");
+      btn.textContent = open ? "접기" : "+"+btn.getAttribute("data-usetoggle");
     });
   });
   tbody.querySelectorAll("input.rowCheck").forEach(cb=>{
