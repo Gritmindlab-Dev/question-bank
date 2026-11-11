@@ -654,7 +654,7 @@ function renderTable(){
     const usageFull = usage.map(u=>[u.institution, u.when, u.grade].filter(Boolean).join(' ')).filter(Boolean).join('\n');
     const whenKey = u => { const m = String(u.when||"").match(/(\d{4})\s*년(?:\s*(\d{1,2})\s*월)?/); return m ? (+m[1])*100 + (+(m[2]||0)) : 0; };
     const chips = usage.slice().sort((a,b)=>whenKey(b)-whenKey(a)).map(usageChip); // 최근 사용이 앞에
-    const usageHtml = chips.length ? chips.slice(0,3).join('') + (chips.length>3 ? '<span class="usechip more">+'+(chips.length-3)+'</span>' : '') : '-';
+    const usageHtml = chips.length ? chips.join('') : '-'; // 모든 이력을 접지 않고 표시 (최근 순)
     const checked = selectedIds.has(q.id) ? 'checked' : '';
     return '<tr>'+
       '<td><input type="checkbox" class="rowCheck" data-id="'+q.id+'" '+checked+'></td>'+
