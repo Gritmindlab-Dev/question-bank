@@ -1171,6 +1171,49 @@ document.getElementById("detailEditToggle").addEventListener("click", async ()=>
 });
 
 // ---------- bulk edit modal ----------
+// ---------- HWPX(한글) 내보내기 ----------
+const overlayHwpx = document.getElementById("overlayHwpx");
+const closeHwpx = ()=>overlayHwpx.classList.remove("open");
+document.getElementById("bulkHwpxBtn").addEventListener("click", ()=>{
+  document.getElementById("hwpxCount").textContent = selectedIds.size;
+  document.getElementById("hwpxStatus").textContent = "";
+  overlayHwpx.classList.add("open");
+});
+document.getElementById("cancelHwpx").addEventListener("click", closeHwpx);
+document.getElementById("closeXHwpx").addEventListener("click", closeHwpx);
+overlayHwpx.addEventListener("click", e=>{ if(e.target===overlayHwpx) closeHwpx(); });
+document.getElementById("runHwpx").addEventListener("click", async ()=>{
+  const btn = document.getElementById("runHwpx"), status = document.getElementById("hwpxStatus");
+  if(!selectedIds.size){ status.textContent = "선택된 문항이 없어요."; return; }
+  const order = document.getElementById("hwpx_order").value;
+  let list;
+  if(order === "list"){
+    const visible = getFiltered().map(q=>q.id);
+    const rest = Array.from(selectedIds).filter(id=>!visible.includes(id));
+    list = [...visible.filter(id=>selectedIds.has(id)), ...rest].map(id=>allQuestions.find(q=>q.id===id)).filter(Boolean);
+  } else {
+    const dOrder = Object.keys(DOMAIN_CODE);
+    list = Array.from(selectedIds).map(id=>allQuestions.find(q=>q.id===id)).filter(Boolean)
+      .sort((a,b)=> (dOrder.indexOf(a.domain)-dOrder.indexOf(b.domain)) || String(a.source||"").localeCompare(String(b.source||"")) || ((a.examQuestionNumber??999)-(b.examQuestionNumber??999)));
+  }
+  btn.disabled = true;
+  try{
+    const { buildHwpx } = await import("./hwpx-export.mjs?v=20261111-2");
+    const title = document.getElementById("hwpx_title").value.trim() || "그릿마인드랩 NCS 모의고사";
+    const blob = await buildHwpx(list, { title, answers: document.getElementById("hwpx_answers").value,
+      onProgress:(i,n)=>{ status.textContent = "만드는 중… "+i+" / "+n; } });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = title.replace(/[\\/:*?"<>|]/g,"_") + ".hwpx";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(a.href), 5000);
+    status.textContent = "✓ "+list.length+"개 문항을 한글 파일로 만들었어요. 내려받은 파일을 한글에서 열어 확인해주세요.";
+  }catch(err){
+    console.error(err);
+    status.textContent = "만들지 못했어요: " + (err && err.message ? err.message : "알 수 없는 오류");
+  }finally{ btn.disabled = false; }
+});
+
 const overlayBulk = document.getElementById("overlayBulk");
 document.getElementById("bulkEditBtn").addEventListener("click", ()=>{
   document.getElementById("bulkModalCount").textContent = selectedIds.size;
